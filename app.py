@@ -38,17 +38,44 @@ async def scrape_dividends(symbol: str) -> List[Dict]:
         try:
             # Navigate to the Settrade page
             url = f"https://www.settrade.com/th/equities/quote/{symbol}/rights-benefits"
-            await page.goto(url, wait_until='networkidle', timeout=30000)
             
-            # Wait for the table to load with increased timeout
+            # Set longer timeout for initial page load
+            await page.goto(url, timeout=60000)
+            
+            # Wait for any loading indicators to disappear
             try:
-                await page.wait_for_selector('table.table-info', timeout=30000)
+                await page.wait_for_selector('.loading', state='hidden', timeout=10000)
             except PlaywrightTimeoutError:
+                pass  # Ignore if no loading indicator found
+            
+            # Wait for the main content to be visible
+            await page.wait_for_selector('body', state='visible', timeout=10000)
+            
+            # Try to find the dividend table with multiple selectors
+            selectors = [
+                'table.table-info',
+                'div.table-responsive table',
+                'table[class*="table"]'
+            ]
+            
+            table_found = False
+            for selector in selectors:
+                try:
+                    await page.wait_for_selector(selector, timeout=10000)
+                    table_found = True
+                    break
+                except PlaywrightTimeoutError:
+                    continue
+            
+            if not table_found:
                 # Check if page has error message
                 error_text = await page.text_content('body')
                 if 'ไม่พบข้อมูล' in error_text or 'Not Found' in error_text:
                     raise HTTPException(status_code=404, detail=f"Symbol '{symbol}' not found")
-                raise HTTPException(status_code=500, detail="Timeout waiting for dividend table to load")
+                raise HTTPException(status_code=500, detail="Dividend table not found")
+            
+            # Wait a bit for any dynamic content to load
+            await page.wait_for_timeout(2000)
             
             # Get the page content
             content = await page.content()
@@ -56,8 +83,13 @@ async def scrape_dividends(symbol: str) -> List[Dict]:
             # Parse with BeautifulSoup
             soup = BeautifulSoup(content, 'html.parser')
             
-            # Find the dividend table
-            table = soup.find('table', {'class': 'table-info'})
+            # Try different table selectors
+            table = None
+            for selector in selectors:
+                table = soup.select_one(selector)
+                if table:
+                    break
+            
             if not table:
                 raise HTTPException(status_code=404, detail="Dividend table not found")
             
@@ -75,6 +107,9 @@ async def scrape_dividends(symbol: str) -> List[Dict]:
                         'payment_date': cols[3].text.strip()
                     }
                     dividends.append(dividend)
+            
+            if not dividends:
+                raise HTTPException(status_code=404, detail="No dividend data found")
             
             return dividends
             
