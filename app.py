@@ -42,40 +42,37 @@ async def scrape_dividends(symbol: str) -> List[Dict]:
             # Set longer timeout for initial page load
             await page.goto(url, timeout=60000)
             
-            # Wait for any loading indicators to disappear
-            try:
-                await page.wait_for_selector('.loading', state='hidden', timeout=10000)
-            except PlaywrightTimeoutError:
-                pass  # Ignore if no loading indicator found
-            
             # Wait for the main content to be visible
             await page.wait_for_selector('body', state='visible', timeout=10000)
             
-            # Try to find the dividend table with multiple selectors
-            selectors = [
-                'table.table-info',
-                'div.table-responsive table',
-                'table[class*="table"]'
-            ]
+            # Wait for the stock name to be visible (indicates page is loaded)
+            try:
+                await page.wait_for_selector('h1', timeout=10000)
+            except PlaywrightTimeoutError:
+                raise HTTPException(status_code=404, detail=f"Symbol '{symbol}' not found")
             
-            table_found = False
-            for selector in selectors:
-                try:
-                    await page.wait_for_selector(selector, timeout=10000)
-                    table_found = True
-                    break
-                except PlaywrightTimeoutError:
-                    continue
+            # Check if we're on the right page
+            page_title = await page.title()
+            if 'ไม่พบข้อมูล' in page_title or 'Not Found' in page_title:
+                raise HTTPException(status_code=404, detail=f"Symbol '{symbol}' not found")
             
-            if not table_found:
-                # Check if page has error message
-                error_text = await page.text_content('body')
-                if 'ไม่พบข้อมูล' in error_text or 'Not Found' in error_text:
-                    raise HTTPException(status_code=404, detail=f"Symbol '{symbol}' not found")
-                raise HTTPException(status_code=500, detail="Dividend table not found")
-            
-            # Wait a bit for any dynamic content to load
-            await page.wait_for_timeout(2000)
+            # Wait for the dividend table to load
+            try:
+                # First try to find the table container
+                await page.wait_for_selector('div.table-responsive', timeout=10000)
+                
+                # Then wait for the actual table
+                await page.wait_for_selector('div.table-responsive table', timeout=10000)
+                
+                # Wait a bit more for any dynamic content
+                await page.wait_for_timeout(2000)
+                
+            except PlaywrightTimeoutError:
+                # If table not found, check if there's any dividend data
+                content = await page.content()
+                if 'ไม่มีข้อมูล' in content or 'No data' in content:
+                    return []  # Return empty list if no dividend data
+                raise HTTPException(status_code=500, detail="Could not find dividend table")
             
             # Get the page content
             content = await page.content()
@@ -83,15 +80,10 @@ async def scrape_dividends(symbol: str) -> List[Dict]:
             # Parse with BeautifulSoup
             soup = BeautifulSoup(content, 'html.parser')
             
-            # Try different table selectors
-            table = None
-            for selector in selectors:
-                table = soup.select_one(selector)
-                if table:
-                    break
-            
+            # Find the dividend table
+            table = soup.select_one('div.table-responsive table')
             if not table:
-                raise HTTPException(status_code=404, detail="Dividend table not found")
+                return []  # Return empty list if no table found
             
             # Extract dividend data
             dividends = []
@@ -107,9 +99,6 @@ async def scrape_dividends(symbol: str) -> List[Dict]:
                         'payment_date': cols[3].text.strip()
                     }
                     dividends.append(dividend)
-            
-            if not dividends:
-                raise HTTPException(status_code=404, detail="No dividend data found")
             
             return dividends
             
