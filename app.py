@@ -5,12 +5,23 @@ import redis
 import json
 from typing import List, Dict, Optional
 import time
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 app = FastAPI(title="Thai Stock Dividend API")
 
-# Redis configuration
-redis_client = redis.Redis(host='redis', port=6379, db=0)
-CACHE_EXPIRY = 300  # 5 minutes in seconds
+# Redis configuration from environment variables
+redis_client = redis.Redis(
+    host=os.getenv('REDIS_HOST', 'redis'),
+    port=int(os.getenv('REDIS_PORT', 6379)),
+    db=int(os.getenv('REDIS_DB', 0)),
+    username=os.getenv('REDIS_USERNAME', 'default'),
+    password=os.getenv('REDIS_PASSWORD', None)
+)
+CACHE_EXPIRY = int(os.getenv('CACHE_EXPIRY', 300))  # 5 minutes in seconds
 
 def scrape_dividends(symbol: str) -> List[Dict]:
     with sync_playwright() as p:
@@ -95,4 +106,8 @@ async def get_dividends(symbol: str) -> Dict:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    uvicorn.run(
+        app,
+        host=os.getenv('API_HOST', '0.0.0.0'),
+        port=int(os.getenv('API_PORT', 8000))
+    ) 

@@ -9,16 +9,42 @@ A FastAPI application that scrapes dividend information from Settrade for Thai s
 - Uses Playwright for JavaScript rendering
 - BeautifulSoup for HTML parsing
 - Docker and docker-compose support
+- Environment variable configuration
 
 ## Prerequisites
 
 - Docker and Docker Compose
 - Python 3.11+ (for local development)
 
+## Environment Configuration
+
+1. Copy the example environment file:
+```bash
+cp .env.example .env
+```
+
+2. Edit `.env` file with your configuration:
+```env
+# Redis Configuration
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_DB=0
+REDIS_USERNAME=default
+REDIS_PASSWORD=your_redis_password
+
+# API Configuration
+API_HOST=0.0.0.0
+API_PORT=8000
+
+# Cache Configuration
+CACHE_EXPIRY=300  # 5 minutes in seconds
+```
+
 ## Running with Docker Compose
 
 1. Clone the repository
-2. Run the following command:
+2. Configure your environment variables
+3. Run the following command:
 ```bash
 docker-compose up --build
 ```
