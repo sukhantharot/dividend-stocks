@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from playwright.sync_api import sync_playwright
+from playwright.async_api import async_playwright
 from bs4 import BeautifulSoup
 import redis
 import json
@@ -23,21 +23,21 @@ redis_client = redis.Redis(
 )
 CACHE_EXPIRY = int(os.getenv('CACHE_EXPIRY', 300))  # 5 minutes in seconds
 
-def scrape_dividends(symbol: str) -> List[Dict]:
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+async def scrape_dividends(symbol: str) -> List[Dict]:
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
         
         try:
             # Navigate to the Settrade page
             url = f"https://www.settrade.com/th/equities/quote/{symbol}/rights-benefits"
-            page.goto(url)
+            await page.goto(url)
             
             # Wait for the table to load
-            page.wait_for_selector('table.table-info', timeout=10000)
+            await page.wait_for_selector('table.table-info', timeout=10000)
             
             # Get the page content
-            content = page.content()
+            content = await page.content()
             
             # Parse with BeautifulSoup
             soup = BeautifulSoup(content, 'html.parser')
@@ -67,7 +67,7 @@ def scrape_dividends(symbol: str) -> List[Dict]:
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
         finally:
-            browser.close()
+            await browser.close()
 
 @app.get("/dividends")
 async def get_dividends(symbol: str) -> Dict:
@@ -81,7 +81,7 @@ async def get_dividends(symbol: str) -> Dict:
     
     try:
         # Scrape new data
-        dividends = scrape_dividends(symbol)
+        dividends = await scrape_dividends(symbol)
         
         # Prepare response
         response = {
