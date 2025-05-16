@@ -36,71 +36,65 @@ async def scrape_dividends(symbol: str) -> List[Dict]:
         page = await context.new_page()
         
         try:
-            # Navigate to the Settrade page
-            url = f"https://www.settrade.com/th/equities/quote/{symbol}/rights-benefits"
-            
-            # Set longer timeout for initial page load
-            await page.goto(url, timeout=60000)
+            # Navigate to Google Finance
+            url = f"https://www.google.com/finance/quote/{symbol}:BKK"
+            await page.goto(url, timeout=30000)
             
             # Wait for the main content to be visible
             await page.wait_for_selector('body', state='visible', timeout=10000)
             
-            # Wait for the stock name to be visible (indicates page is loaded)
+            # Check if stock exists
             try:
                 await page.wait_for_selector('h1', timeout=10000)
             except PlaywrightTimeoutError:
                 raise HTTPException(status_code=404, detail=f"Symbol '{symbol}' not found")
             
-            # Check if we're on the right page
-            page_title = await page.title()
-            if 'ไม่พบข้อมูล' in page_title or 'Not Found' in page_title:
-                raise HTTPException(status_code=404, detail=f"Symbol '{symbol}' not found")
-            
-            # Wait for the dividend table to load
+            # Wait for dividend data
             try:
-                # First try to find the table container
-                await page.wait_for_selector('div.table-responsive', timeout=10000)
+                # Wait for the dividend section
+                await page.wait_for_selector('div[data-test="dividend-yield"]', timeout=10000)
                 
-                # Then wait for the actual table
-                await page.wait_for_selector('div.table-responsive table', timeout=10000)
+                # Get the page content
+                content = await page.content()
                 
-                # Wait a bit more for any dynamic content
-                await page.wait_for_timeout(2000)
+                # Parse with BeautifulSoup
+                soup = BeautifulSoup(content, 'html.parser')
+                
+                # Find dividend yield
+                dividend_yield = soup.select_one('div[data-test="dividend-yield"]')
+                if not dividend_yield:
+                    return []  # Return empty list if no dividend data
+                
+                # Extract dividend data
+                dividends = []
+                dividend_value = dividend_yield.text.strip()
+                
+                if dividend_value and dividend_value != '-':
+                    # Get current price
+                    price_element = soup.select_one('div[data-test="current-price"]')
+                    current_price = price_element.text.strip() if price_element else '0'
+                    
+                    # Calculate dividend per share
+                    try:
+                        price = float(current_price.replace('฿', '').replace(',', ''))
+                        yield_percent = float(dividend_value.replace('%', ''))
+                        dividend_per_share = (price * yield_percent) / 100
+                        
+                        dividend = {
+                            'date': time.strftime('%Y-%m-%d'),
+                            'type': 'เงินปันผล',
+                            'value': f'{dividend_per_share:.2f}',
+                            'yield': dividend_value,
+                            'price': current_price
+                        }
+                        dividends.append(dividend)
+                    except (ValueError, ZeroDivisionError):
+                        pass
+                
+                return dividends
                 
             except PlaywrightTimeoutError:
-                # If table not found, check if there's any dividend data
-                content = await page.content()
-                if 'ไม่มีข้อมูล' in content or 'No data' in content:
-                    return []  # Return empty list if no dividend data
-                raise HTTPException(status_code=500, detail="Could not find dividend table")
-            
-            # Get the page content
-            content = await page.content()
-            
-            # Parse with BeautifulSoup
-            soup = BeautifulSoup(content, 'html.parser')
-            
-            # Find the dividend table
-            table = soup.select_one('div.table-responsive table')
-            if not table:
-                return []  # Return empty list if no table found
-            
-            # Extract dividend data
-            dividends = []
-            rows = table.find_all('tr')[1:]  # Skip header row
-            
-            for row in rows:
-                cols = row.find_all('td')
-                if len(cols) >= 4:
-                    dividend = {
-                        'date': cols[0].text.strip(),
-                        'type': cols[1].text.strip(),
-                        'value': cols[2].text.strip(),
-                        'payment_date': cols[3].text.strip()
-                    }
-                    dividends.append(dividend)
-            
-            return dividends
+                return []  # Return empty list if no dividend data
             
         except HTTPException as e:
             raise e
