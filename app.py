@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from bs4 import BeautifulSoup
 import redis
 import json
@@ -25,16 +25,30 @@ CACHE_EXPIRY = int(os.getenv('CACHE_EXPIRY', 300))  # 5 minutes in seconds
 
 async def scrape_dividends(symbol: str) -> List[Dict]:
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
+        browser = await p.chromium.launch(
+            headless=True,
+            args=['--no-sandbox', '--disable-setuid-sandbox']
+        )
+        context = await browser.new_context(
+            viewport={'width': 1920, 'height': 1080},
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        )
+        page = await context.new_page()
         
         try:
             # Navigate to the Settrade page
             url = f"https://www.settrade.com/th/equities/quote/{symbol}/rights-benefits"
-            await page.goto(url)
+            await page.goto(url, wait_until='networkidle', timeout=30000)
             
-            # Wait for the table to load
-            await page.wait_for_selector('table.table-info', timeout=10000)
+            # Wait for the table to load with increased timeout
+            try:
+                await page.wait_for_selector('table.table-info', timeout=30000)
+            except PlaywrightTimeoutError:
+                # Check if page has error message
+                error_text = await page.text_content('body')
+                if 'ไม่พบข้อมูล' in error_text or 'Not Found' in error_text:
+                    raise HTTPException(status_code=404, detail=f"Symbol '{symbol}' not found")
+                raise HTTPException(status_code=500, detail="Timeout waiting for dividend table to load")
             
             # Get the page content
             content = await page.content()
@@ -64,9 +78,14 @@ async def scrape_dividends(symbol: str) -> List[Dict]:
             
             return dividends
             
+        except HTTPException as e:
+            raise e
+        except PlaywrightTimeoutError as e:
+            raise HTTPException(status_code=500, detail=f"Timeout while scraping: {str(e)}")
         except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail=f"Error while scraping: {str(e)}")
         finally:
+            await context.close()
             await browser.close()
 
 @app.get("/dividends")
