@@ -141,6 +141,60 @@ async def get_dividends(symbol: str) -> Dict:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching dividend data: {str(e)}")
 
+
+@app.get("/dividends-panphor")        
+async def get_dividends_panphor(symbol: str) -> Dict:
+    url = f"https://aio.panphol.com/stock/{symbol.upper()}/dividend"
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=['--no-sandbox', '--disable-setuid-sandbox']
+        )
+        context = await browser.new_context(
+            viewport={'width': 1920, 'height': 1080},
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        )
+        page = await context.new_page()
+        try:
+            await page.goto(url, timeout=30000)
+            await page.wait_for_selector('#basket', timeout=15000)
+            content = await page.content()
+            soup = BeautifulSoup(content, 'html.parser')
+            table = soup.find('table', id='basket')
+            if not table:
+                raise HTTPException(status_code=404, detail='Dividend table not found')
+            tbody = table.find('tbody')
+            if not tbody:
+                raise HTTPException(status_code=404, detail='No table body found')
+            rows = tbody.find_all('tr')
+            dividends = []
+            for row in rows:
+                cols = [col.get_text(strip=True) for col in row.find_all(['td', 'th'])]
+                if len(cols) < 7:
+                    continue
+                dividend = {
+                    'year': cols[0],
+                    'quarter': cols[1],
+                    'yield_percent': cols[2],
+                    'amount': cols[3],
+                    'xd_date': cols[4],
+                    'pay_date': cols[5],
+                    'type': cols[6],
+                }
+                dividends.append(dividend)
+            return {
+                'symbol': symbol.upper(),
+                'dividends': dividends,
+                'timestamp': time.time()
+            }
+        except PlaywrightTimeoutError as e:
+            raise HTTPException(status_code=500, detail=f"Timeout while scraping: {str(e)}")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error while scraping: {str(e)}")
+        finally:
+            await context.close()
+            await browser.close()
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
