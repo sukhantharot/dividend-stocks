@@ -239,15 +239,18 @@ async def get_dividends_panphor(symbol: str, force: int = Query(0, description="
             await browser.close()
 
 @app.get("/dividends-summary")
-async def get_dividends_summary() -> Dict:
+async def get_dividends_summary(year: Optional[str] = Query(None, description="Year in BE (พ.ศ.), e.g. 2567")) -> Dict:
     # Load symbols from set.json
     with open("set.json", "r", encoding="utf-8") as f:
         symbols = pyjson.load(f)["symbols"]
     now = datetime.now(UTC)
-    current_year = str(now.year + 543)  # Thai year (พ.ศ.)
+    if year is None:
+        current_year = str(now.year + 543)  # Thai year (พ.ศ.)
+    else:
+        current_year = str(year)
     summary = []
     for symbol in symbols:
-        # Find all dividends for this symbol in the current year
+        # Find all dividends for this symbol in the selected year
         records = list(dividends_collection.find({
             'symbol': symbol,
             'year': current_year
