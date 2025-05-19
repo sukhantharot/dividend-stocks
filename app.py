@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 from pymongo import MongoClient
 from datetime import datetime, timedelta, UTC
 import json as pyjson
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 # Load environment variables
 load_dotenv()
@@ -30,6 +32,31 @@ MONGO_URI = os.getenv('MONGO_URI', os.getenv('MONGO_URL'))
 mongo_client = MongoClient(MONGO_URI)
 db = mongo_client['dividend_db']
 dividends_collection = db['dividends']
+
+class DividendRecord(BaseModel):
+    symbol: str = Field(..., example="BANPU")
+    year: str = Field(..., example="2567")
+    quarter: str = Field(..., example="2")
+    yield_percent: str = Field(..., example="3.05")
+    amount: str = Field(..., example="0.18")
+    xd_date: str = Field(..., example="10/09/67")
+    pay_date: str = Field(..., example="26/09/67")
+    type: str = Field(..., example="เงินปันผล")
+    scraped_at: float = Field(..., example=1718000000)
+
+class DividendResponse(BaseModel):
+    symbol: str
+    dividends: list[DividendRecord]
+    timestamp: float
+
+class SummaryItem(BaseModel):
+    symbol: str
+    latest_dividend: DividendRecord
+
+class SummaryResponse(BaseModel):
+    summary: list[SummaryItem]
+    year: str
+    timestamp: float
 
 async def scrape_dividends(symbol: str) -> List[Dict]:
     async with async_playwright() as p:
@@ -114,8 +141,8 @@ async def scrape_dividends(symbol: str) -> List[Dict]:
             await context.close()
             await browser.close()
 
-@app.get("/dividends")
-async def get_dividends(symbol: str) -> Dict:
+@app.get("/dividends", response_model=DividendResponse, summary="Get latest dividend from Google Finance", description="ดึงข้อมูลปันผลล่าสุดของหุ้นจาก Google Finance (scrape ใหม่ทุกครั้ง)")
+async def get_dividends(symbol: str = Query(..., description="Stock symbol, e.g. BANPU")) -> dict:
     # Convert symbol to lowercase
     symbol = symbol.lower()
     
@@ -150,8 +177,16 @@ async def get_dividends(symbol: str) -> Dict:
         raise HTTPException(status_code=500, detail=f"Error fetching dividend data: {str(e)}")
 
 
-@app.get("/dividends-panphor")        
-async def get_dividends_panphor(symbol: str, force: int = Query(0, description="Force scraping if 1, otherwise use cache if data is recent")) -> Dict:
+@app.get(
+    "/dividends-panphor",
+    response_model=DividendResponse,
+    summary="Get dividend from Panphol.com (with MongoDB cache)",
+    description="ดึงข้อมูลปันผลจาก https://aio.panphol.com/stock/{symbol}/dividend พร้อม cache ใน MongoDB"
+)
+async def get_dividends_panphor(
+    symbol: str = Query(..., description="Stock symbol, e.g. BANPU"),
+    force: int = Query(0, description="Force scraping if 1, otherwise use cache if data is recent")
+) -> dict:
     symbol_upper = symbol.upper()
     now = datetime.now(UTC)
     one_month_ago = now - timedelta(days=30)
@@ -238,8 +273,15 @@ async def get_dividends_panphor(symbol: str, force: int = Query(0, description="
             await context.close()
             await browser.close()
 
-@app.get("/dividends-summary")
-async def get_dividends_summary(year: Optional[str] = Query(None, description="Year in BE (พ.ศ.), e.g. 2567")) -> Dict:
+@app.get(
+    "/dividends-summary",
+    response_model=SummaryResponse,
+    summary="Summary of all stocks' latest dividend in a year",
+    description="สรุปหุ้นทั้งหมดใน set.json พร้อมข้อมูลปันผลล่าสุดของแต่ละหุ้นในปีที่เลือก"
+)
+async def get_dividends_summary(
+    year: Optional[str] = Query(None, description="Year in BE (พ.ศ.), e.g. 2567")
+) -> dict:
     # Load symbols from set.json
     with open("set.json", "r", encoding="utf-8") as f:
         symbols = pyjson.load(f)["symbols"]
