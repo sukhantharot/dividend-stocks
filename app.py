@@ -213,6 +213,12 @@ async def get_dividends_summary(
         'timestamp': now.timestamp()
     }
 
+@app.get("/symbols", summary="Get all stock symbols from set.json", description="ดึงรายชื่อหุ้นทั้งหมดจาก set.json")
+async def get_symbols() -> dict:
+    with open("set.json", "r", encoding="utf-8") as f:
+        symbols = pyjson.load(f)["symbols"]
+    return {"symbols": symbols}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
