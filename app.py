@@ -8,7 +8,8 @@ import time
 import os
 from dotenv import load_dotenv
 from pymongo import MongoClient
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
+import json as pyjson
 
 # Load environment variables
 load_dotenv()
@@ -25,7 +26,7 @@ redis_client = redis.Redis(
 )
 CACHE_EXPIRY = int(os.getenv('CACHE_EXPIRY', 300))  # 5 minutes in seconds
 
-MONGO_URI = os.getenv('MONGO_URI', 'mongodb://mongo:TFNXYBgFAHkFbfEDwoAjgTyFedsShxHR@mainline.proxy.rlwy.net:36106')
+MONGO_URI = os.getenv('MONGO_URI', os.getenv('MONGO_URL'))
 mongo_client = MongoClient(MONGO_URI)
 db = mongo_client['dividend_db']
 dividends_collection = db['dividends']
@@ -152,7 +153,7 @@ async def get_dividends(symbol: str) -> Dict:
 @app.get("/dividends-panphor")        
 async def get_dividends_panphor(symbol: str, force: int = Query(0, description="Force scraping if 1, otherwise use cache if data is recent")) -> Dict:
     symbol_upper = symbol.upper()
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     one_month_ago = now - timedelta(days=30)
     # 1. Check MongoDB for recent data unless force=1
     if not force:
@@ -236,6 +237,45 @@ async def get_dividends_panphor(symbol: str, force: int = Query(0, description="
         finally:
             await context.close()
             await browser.close()
+
+@app.get("/dividends-summary")
+async def get_dividends_summary() -> Dict:
+    # Load symbols from set.json
+    with open("set.json", "r", encoding="utf-8") as f:
+        symbols = pyjson.load(f)["symbols"]
+    now = datetime.now(UTC)
+    current_year = str(now.year + 543)  # Thai year (พ.ศ.)
+    summary = []
+    for symbol in symbols:
+        # Find all dividends for this symbol in the current year
+        records = list(dividends_collection.find({
+            'symbol': symbol,
+            'year': current_year
+        }, {'_id': 0}))
+        if not records:
+            continue
+        # Find the latest by month (from xd_date or pay_date)
+        def extract_month(rec):
+            # Try xd_date first, fallback to pay_date
+            for key in ['xd_date', 'pay_date']:
+                try:
+                    # Expect format dd/mm/yy
+                    parts = rec[key].split('/')
+                    if len(parts) >= 2:
+                        return int(parts[1])
+                except Exception:
+                    continue
+            return 0
+        latest = max(records, key=extract_month)
+        summary.append({
+            'symbol': symbol,
+            'latest_dividend': latest
+        })
+    return {
+        'summary': summary,
+        'year': current_year,
+        'timestamp': now.timestamp()
+    }
 
 if __name__ == "__main__":
     import uvicorn
