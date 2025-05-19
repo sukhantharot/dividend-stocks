@@ -12,11 +12,21 @@ from datetime import datetime, timedelta, UTC
 import json as pyjson
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from fastapi.middleware.cors import CORSMiddleware
 
 # Load environment variables
 load_dotenv()
 
 app = FastAPI(title="Thai Stock Dividend API")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Redis configuration from environment variables
 redis_client = redis.Redis(
