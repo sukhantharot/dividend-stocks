@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from bs4 import BeautifulSoup
 import redis
@@ -7,6 +7,8 @@ from typing import List, Dict, Optional
 import time
 import os
 from dotenv import load_dotenv
+from pymongo import MongoClient
+from datetime import datetime, timedelta
 
 # Load environment variables
 load_dotenv()
@@ -22,6 +24,11 @@ redis_client = redis.Redis(
     password=os.getenv('REDIS_PASSWORD', None)
 )
 CACHE_EXPIRY = int(os.getenv('CACHE_EXPIRY', 300))  # 5 minutes in seconds
+
+MONGO_URI = os.getenv('MONGO_URI', 'mongodb://mongo:TFNXYBgFAHkFbfEDwoAjgTyFedsShxHR@mainline.proxy.rlwy.net:36106')
+mongo_client = MongoClient(MONGO_URI)
+db = mongo_client['dividend_db']
+dividends_collection = db['dividends']
 
 async def scrape_dividends(symbol: str) -> List[Dict]:
     async with async_playwright() as p:
@@ -143,8 +150,24 @@ async def get_dividends(symbol: str) -> Dict:
 
 
 @app.get("/dividends-panphor")        
-async def get_dividends_panphor(symbol: str) -> Dict:
-    url = f"https://aio.panphol.com/stock/{symbol.upper()}/dividend"
+async def get_dividends_panphor(symbol: str, force: int = Query(0, description="Force scraping if 1, otherwise use cache if data is recent")) -> Dict:
+    symbol_upper = symbol.upper()
+    now = datetime.utcnow()
+    one_month_ago = now - timedelta(days=30)
+    # 1. Check MongoDB for recent data unless force=1
+    if not force:
+        recent_dividends = list(dividends_collection.find({
+            'symbol': symbol_upper,
+            'scraped_at': { '$gte': one_month_ago.timestamp() }
+        }, {'_id': 0}))
+        if recent_dividends:
+            return {
+                'symbol': symbol_upper,
+                'dividends': recent_dividends,
+                'timestamp': now.timestamp()
+            }
+    # 2. Scrape new data
+    url = f"https://aio.panphol.com/stock/{symbol_upper}/dividend"
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -173,6 +196,7 @@ async def get_dividends_panphor(symbol: str) -> Dict:
                 if len(cols) < 7:
                     continue
                 dividend = {
+                    'symbol': symbol_upper,
                     'year': cols[0],
                     'quarter': cols[1],
                     'yield_percent': cols[2],
@@ -180,12 +204,30 @@ async def get_dividends_panphor(symbol: str) -> Dict:
                     'xd_date': cols[4],
                     'pay_date': cols[5],
                     'type': cols[6],
+                    'scraped_at': now.timestamp()
                 }
                 dividends.append(dividend)
+            # 3. Insert only new records
+            new_dividends = []
+            for d in dividends:
+                exists = dividends_collection.find_one({
+                    'symbol': d['symbol'],
+                    'year': d['year'],
+                    'quarter': d['quarter'],
+                    'xd_date': d['xd_date'],
+                    'amount': d['amount'],
+                    'type': d['type']
+                })
+                if not exists:
+                    new_dividends.append(d)
+            if new_dividends:
+                dividends_collection.insert_many(new_dividends)
+            # Return all records for this symbol
+            all_dividends = list(dividends_collection.find({'symbol': symbol_upper}, {'_id': 0}))
             return {
-                'symbol': symbol.upper(),
-                'dividends': dividends,
-                'timestamp': time.time()
+                'symbol': symbol_upper,
+                'dividends': all_dividends,
+                'timestamp': now.timestamp()
             }
         except PlaywrightTimeoutError as e:
             raise HTTPException(status_code=500, detail=f"Timeout while scraping: {str(e)}")
