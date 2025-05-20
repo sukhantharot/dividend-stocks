@@ -167,7 +167,9 @@ async def get_dividends_panphor(
                     'quarter': d['quarter'],
                     'xd_date': d['xd_date'],
                     'amount': d['amount'],
-                    'type': d['type']
+                    'type': d['type'],
+                    'xd_date_utc': d['xd_date_utc'],
+                    'pay_date_utc': d['pay_date_utc']
                 })
                 if not exists:
                     new_dividends.append(d)
