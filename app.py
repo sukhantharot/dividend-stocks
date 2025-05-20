@@ -69,8 +69,28 @@ class SummaryResponse(BaseModel):
     year: str
     timestamp: float
 
+def normalize_soon_date(xd_date: str, pay_date: str) -> Optional[datetime]:
+    def parse(dstr):
+        try:
+            d, m, y = dstr.split('/')
+            y = int(y)
+            if y < 100:
+                y += 2500
+            # กรองปีเก่าออก (เช่น ปี < ปีปัจจุบัน - 1)
+            this_year = datetime.now(UTC).year + 543
+            if y < this_year - 1:
+                return None
+            return datetime(y, int(m), int(d), tzinfo=UTC)
+        except Exception:
+            return None
+    xd = parse(xd_date)
+    pay = parse(pay_date)
+    if xd and pay:
+        return xd if xd < pay else pay
+    return xd or pay
+
 @app.get(
-    "/dividends",
+    "/dividends-panphor",
     response_model=DividendResponse,
     summary="Get dividend from Panphol.com (with MongoDB cache)",
     description="ดึงข้อมูลปันผลจาก https://aio.panphol.com/stock/{symbol}/dividend พร้อม cache ใน MongoDB"
@@ -82,7 +102,6 @@ async def get_dividends_panphor(
     symbol_upper = symbol.upper()
     now = datetime.now(UTC)
     one_month_ago = now - timedelta(days=30)
-    # 1. Check MongoDB for recent data unless force=1
     if not force:
         recent_dividends = list(dividends_collection.find({
             'symbol': symbol_upper,
@@ -94,7 +113,6 @@ async def get_dividends_panphor(
                 'dividends': recent_dividends,
                 'timestamp': now.timestamp()
             }
-    # 2. Scrape new data
     url = f"https://aio.panphol.com/stock/{symbol_upper}/dividend"
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -123,6 +141,7 @@ async def get_dividends_panphor(
                 cols = [col.get_text(strip=True) for col in row.find_all(['td', 'th'])]
                 if len(cols) < 7:
                     continue
+                soon_date = normalize_soon_date(cols[4], cols[5])
                 dividend = {
                     'symbol': symbol_upper,
                     'year': cols[0],
@@ -132,10 +151,10 @@ async def get_dividends_panphor(
                     'xd_date': cols[4],
                     'pay_date': cols[5],
                     'type': cols[6],
-                    'scraped_at': now.timestamp()
+                    'scraped_at': now.timestamp(),
+                    'soon_date': soon_date.isoformat() if soon_date else None
                 }
                 dividends.append(dividend)
-            # 3. Insert only new records
             new_dividends = []
             for d in dividends:
                 exists = dividends_collection.find_one({
@@ -150,7 +169,6 @@ async def get_dividends_panphor(
                     new_dividends.append(d)
             if new_dividends:
                 dividends_collection.insert_many(new_dividends)
-            # Return all records for this symbol
             all_dividends = list(dividends_collection.find({'symbol': symbol_upper}, {'_id': 0}))
             return {
                 'symbol': symbol_upper,
@@ -220,35 +238,13 @@ async def get_symbols() -> dict:
         symbols = pyjson.load(f)["symbols"]
     return {"symbols": symbols}
 
-@app.get("/dividends/soon", summary="Get stocks with upcoming XD or dividend payment date", description="แสดงหุ้นที่ใกล้จะขึ้น XD หรือจ่ายปันผล (อิงจาก xd_date หรือ pay_date >= วันนี้)")
+@app.get("/dividends/soon", summary="Get stocks with upcoming XD or dividend payment date", description="แสดงหุ้นที่ใกล้จะขึ้น XD หรือจ่ายปันผล (อิงจาก soon_date >= วันนี้)")
 async def get_dividends_soon() -> dict:
     today = datetime.now(UTC)
-    def parse_date(dstr):
-        try:
-            d, m, y = dstr.split('/')
-            y = int(y)
-            if y < 100:
-                y += 2500
-            return datetime(y, int(m), int(d), tzinfo=UTC)
-        except Exception:
-            return None
-    # Query all dividends with xd_date or pay_date > today
-    all_dividends = list(dividends_collection.find({}, {'_id': 0}))
-    soon_list = []
-    for rec in all_dividends:
-        soonest_date = None
-        soonest_type = None
-        for key in ['xd_date', 'pay_date']:
-            dt = parse_date(rec.get(key, ''))
-            if dt and dt >= today:
-                if soonest_date is None or dt < soonest_date:
-                    soonest_date = dt
-                    soonest_type = key
-        if soonest_date:
-            rec['soon_date'] = soonest_date.strftime('%d/%m/%Y')
-            rec['soon_type'] = soonest_type
-            soon_list.append(rec)
-    soon_list.sort(key=lambda x: parse_date(x['soon_date']) or today)
+    soon_list = list(dividends_collection.find(
+        {"soon_date": {"$gte": today.isoformat()}},
+        {"_id": 0}
+    ).sort("soon_date", 1))
     return {"soon": soon_list, "timestamp": today.timestamp()}
 
 @app.get("/symbols/db", summary="Find all symbols in MongoDB", description="ดึง symbol ทั้งหมดจาก MongoDB")
