@@ -219,6 +219,47 @@ async def get_symbols() -> dict:
         symbols = pyjson.load(f)["symbols"]
     return {"symbols": symbols}
 
+@app.get("/dividends/soon", summary="Get stocks with upcoming XD or dividend payment date", description="แสดงหุ้นที่ใกล้จะขึ้น XD หรือจ่ายปันผล (อิงจาก xd_date หรือ pay_date >= วันนี้)")
+async def get_dividends_soon() -> dict:
+    with open("set.json", "r", encoding="utf-8") as f:
+        symbols = pyjson.load(f)["symbols"]
+    today = datetime.now(UTC)
+    today_thai = today.year + 543  # พ.ศ.
+    today_str = today.strftime("%d/%m/%y")
+    soon_list = []
+    for symbol in symbols:
+        # ค้นหาปันผลที่ xd_date หรือ pay_date >= วันนี้ (ปีนี้หรือปีหน้า)
+        records = list(dividends_collection.find({
+            'symbol': symbol
+        }, {'_id': 0}))
+        # หา record ที่ xd_date หรือ pay_date >= วันนี้
+        def parse_date(dstr):
+            try:
+                # format: dd/mm/yy (yy = พ.ศ. - 2500 หรือ 43=2543, 67=2567)
+                d, m, y = dstr.split('/')
+                y = int(y)
+                if y < 100:
+                    y += 2500
+                return datetime(y, int(m), int(d), tzinfo=UTC)
+            except Exception:
+                return None
+        soonest = None
+        soonest_date = None
+        for rec in records:
+            for key in ['xd_date', 'pay_date']:
+                dt = parse_date(rec.get(key, ''))
+                if dt and dt >= today:
+                    if soonest_date is None or dt < soonest_date:
+                        soonest = rec
+                        soonest_date = dt
+        if soonest:
+            soonest['soon_date'] = soonest_date.strftime('%d/%m/%Y')
+            soonest['soon_type'] = 'xd_date' if soonest_date == parse_date(soonest.get('xd_date', '')) else 'pay_date'
+            soon_list.append(soonest)
+    # เรียงลำดับจากวันใกล้สุดไปไกลสุด
+    soon_list.sort(key=lambda x: parse_date(x['xd_date']) or parse_date(x['pay_date']) or today)
+    return {"soon": soon_list, "timestamp": today.timestamp()}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
