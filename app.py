@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, Query, Body
+from fastapi.encoders import jsonable_encoder
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from bs4 import BeautifulSoup
 import redis
@@ -252,10 +253,18 @@ async def get_symbols() -> dict:
 @app.get("/dividends/soon", summary="Get stocks with upcoming XD or dividend payment date", description="แสดงหุ้นที่ใกล้จะขึ้น XD หรือจ่ายปันผล (อิงจาก soon_date >= วันนี้)")
 async def get_dividends_soon() -> dict:
     today = datetime.now(UTC)
-    soon_list = list(dividends_collection.find(
-        {"type": "เงินปันผล"},
-        {"soon_date": {"$gte": today.isoformat()}}
-    ).sort("soon_date", 1))
+
+    cursor = dividends_collection.find(
+        {
+            "type": "เงินปันผล",
+            "soon_date": {"$gte": today}
+        }
+    ).sort("soon_date", 1)
+
+    docs = list(cursor)
+    # แปลง datetime -> ISO‑8601 string ก่อนส่งกลับ
+    soon_list = jsonable_encoder(docs)
+
     return {"soon": soon_list, "timestamp": today.timestamp()}
 
 @app.get("/symbols/db", summary="Find all symbols in MongoDB", description="ดึง symbol ทั้งหมดจาก MongoDB")
