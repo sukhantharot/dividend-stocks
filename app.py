@@ -70,7 +70,7 @@ class SummaryResponse(BaseModel):
     year: str
     timestamp: float
 
-def normalize_soon_date(date: str) -> Optional[datetime]:
+def normalize_date(date: str) -> Optional[datetime]:
     def parse(dstr):
         try:
             d, m, y = dstr.split('/')
@@ -143,7 +143,8 @@ async def get_dividends_panphor(
                 cols = [col.get_text(strip=True) for col in row.find_all(['td', 'th'])]
                 if len(cols) < 7:
                     continue
-                soon_date = normalize_soon_date(cols[4], cols[5])
+                xd_date_utc = normalize_date(cols[4])
+                pay_date_utc = normalize_date(cols[5])
                 dividend = {
                     'symbol': symbol_upper,
                     'year': cols[0],
@@ -154,7 +155,8 @@ async def get_dividends_panphor(
                     'pay_date': cols[5],
                     'type': cols[6],
                     'scraped_at': now.timestamp(),
-                    'soon_date': soon_date
+                    'xd_date_utc': xd_date_utc if xd_date_utc else None,
+                    'pay_date_utc': pay_date_utc if pay_date_utc else None
                 }
                 dividends.append(dividend)
             new_dividends = []
@@ -169,13 +171,6 @@ async def get_dividends_panphor(
                 })
                 if not exists:
                     new_dividends.append(d)
-                else:
-                    # Update soon_date if missing or different
-                    if 'soon_date' not in exists or exists['soon_date'] != d['soon_date']:
-                        dividends_collection.update_one(
-                            {'_id': exists['_id']},
-                            {'$set': {'soon_date': d['soon_date']}}
-                        )
             if new_dividends:
                 dividends_collection.insert_many(new_dividends)
             all_dividends = list(dividends_collection.find({'symbol': symbol_upper}, {'_id': 0}))
