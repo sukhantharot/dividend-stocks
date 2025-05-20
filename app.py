@@ -70,7 +70,7 @@ class SummaryResponse(BaseModel):
     year: str
     timestamp: float
 
-def normalize_soon_date(xd_date: str, pay_date: str) -> Optional[datetime]:
+def normalize_soon_date(date: str) -> Optional[datetime]:
     def parse(dstr):
         try:
             d, m, y = dstr.split('/')
@@ -87,11 +87,8 @@ def normalize_soon_date(xd_date: str, pay_date: str) -> Optional[datetime]:
             return when
         except Exception:
             return None
-
-    xd, pay = parse(xd_date), parse(pay_date)
-    if xd and pay:
-        return xd if xd < pay else pay
-    return xd or pay
+    
+    return parse(date)
 
 
 @app.get(
@@ -250,19 +247,18 @@ async def get_symbols() -> dict:
         symbols = pyjson.load(f)["symbols"]
     return {"symbols": symbols}
 
-@app.get("/dividends/soon", summary="Get stocks with upcoming XD or dividend payment date", description="แสดงหุ้นที่ใกล้จะขึ้น XD หรือจ่ายปันผล (อิงจาก soon_date >= วันนี้)")
+@app.get("/dividends/soon", summary="Get stocks with upcoming XD or dividend payment date", description="แสดงหุ้นที่ใกล้จะขึ้น XD หรือจ่ายปันผล (อิงจาก pay_date_utc >= วันนี้)")
 async def get_dividends_soon() -> dict:
     today = datetime.now(UTC)
 
     cursor = dividends_collection.find(
         {
             "type": "เงินปันผล",
-            "soon_date": {"$gte": today}
+            "pay_date_utc": {"$gte": today}
         }
-    ).sort("soon_date", 1)
+    ).sort("pay_date_utc", 1)
 
     docs = list(cursor)
-    # แปลง datetime -> ISO‑8601 string ก่อนส่งกลับ
     soon_list = jsonable_encoder(docs)
 
     return {"soon": soon_list, "timestamp": today.timestamp()}
