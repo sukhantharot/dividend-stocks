@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Body
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from bs4 import BeautifulSoup
 import redis
@@ -42,6 +42,7 @@ MONGO_URI = os.getenv('MONGO_URI', os.getenv('MONGO_URL'))
 mongo_client = MongoClient(MONGO_URI)
 db = mongo_client['dividend_db']
 dividends_collection = db['dividends']
+SYMBOLS_COLLECTION = db['symbols']
 
 class DividendRecord(BaseModel):
     symbol: str = Field(..., example="BANPU")
@@ -221,44 +222,54 @@ async def get_symbols() -> dict:
 
 @app.get("/dividends/soon", summary="Get stocks with upcoming XD or dividend payment date", description="แสดงหุ้นที่ใกล้จะขึ้น XD หรือจ่ายปันผล (อิงจาก xd_date หรือ pay_date >= วันนี้)")
 async def get_dividends_soon() -> dict:
-    with open("set.json", "r", encoding="utf-8") as f:
-        symbols = pyjson.load(f)["symbols"]
     today = datetime.now(UTC)
-    today_thai = today.year + 543  # พ.ศ.
-    today_str = today.strftime("%d/%m/%y")
+    def parse_date(dstr):
+        try:
+            d, m, y = dstr.split('/')
+            y = int(y)
+            if y < 100:
+                y += 2500
+            return datetime(y, int(m), int(d), tzinfo=UTC)
+        except Exception:
+            return None
+    # Query all dividends with xd_date or pay_date > today
+    all_dividends = list(dividends_collection.find({}, {'_id': 0}))
     soon_list = []
-    for symbol in symbols:
-        # ค้นหาปันผลที่ xd_date หรือ pay_date >= วันนี้ (ปีนี้หรือปีหน้า)
-        records = list(dividends_collection.find({
-            'symbol': symbol
-        }, {'_id': 0}))
-        # หา record ที่ xd_date หรือ pay_date >= วันนี้
-        def parse_date(dstr):
-            try:
-                # format: dd/mm/yy (yy = พ.ศ. - 2500 หรือ 43=2543, 67=2567)
-                d, m, y = dstr.split('/')
-                y = int(y)
-                if y < 100:
-                    y += 2500
-                return datetime(y, int(m), int(d), tzinfo=UTC)
-            except Exception:
-                return None
-        soonest = None
+    for rec in all_dividends:
         soonest_date = None
-        for rec in records:
-            for key in ['xd_date', 'pay_date']:
-                dt = parse_date(rec.get(key, ''))
-                if dt and dt >= today:
-                    if soonest_date is None or dt < soonest_date:
-                        soonest = rec
-                        soonest_date = dt
-        if soonest:
-            soonest['soon_date'] = soonest_date.strftime('%d/%m/%Y')
-            soonest['soon_type'] = 'xd_date' if soonest_date == parse_date(soonest.get('xd_date', '')) else 'pay_date'
-            soon_list.append(soonest)
-    # เรียงลำดับจากวันใกล้สุดไปไกลสุด
-    soon_list.sort(key=lambda x: parse_date(x['xd_date']) or parse_date(x['pay_date']) or today)
+        soonest_type = None
+        for key in ['xd_date', 'pay_date']:
+            dt = parse_date(rec.get(key, ''))
+            if dt and dt >= today:
+                if soonest_date is None or dt < soonest_date:
+                    soonest_date = dt
+                    soonest_type = key
+        if soonest_date:
+            rec['soon_date'] = soonest_date.strftime('%d/%m/%Y')
+            rec['soon_type'] = soonest_type
+            soon_list.append(rec)
+    soon_list.sort(key=lambda x: parse_date(x['soon_date']) or today)
     return {"soon": soon_list, "timestamp": today.timestamp()}
+
+@app.get("/symbols/db", summary="Find all symbols in MongoDB", description="ดึง symbol ทั้งหมดจาก MongoDB")
+async def get_symbols_db() -> dict:
+    symbols = list(SYMBOLS_COLLECTION.find({}, {'_id': 0, 'symbol': 1}))
+    return {"symbols": [s['symbol'] for s in symbols]}
+
+@app.post("/symbols/db", summary="Insert many symbols to MongoDB (skip existing)", description="เพิ่ม symbol หลายตัว (ถ้ามีอยู่แล้วให้ข้าม)")
+async def insert_symbols_db(data: dict = Body(..., example={"symbols": ["AAV", "BANPU"]})) -> dict:
+    input_symbols = set([s.upper() for s in data.get('symbols', [])])
+    existing = set([s['symbol'] for s in SYMBOLS_COLLECTION.find({'symbol': {'$in': list(input_symbols)}}, {'symbol': 1, '_id': 0})])
+    to_insert = [{'symbol': s} for s in input_symbols if s not in existing]
+    if to_insert:
+        SYMBOLS_COLLECTION.insert_many(to_insert)
+    return {"inserted": [s['symbol'] for s in to_insert], "skipped": list(existing)}
+
+@app.delete("/symbols/db", summary="Delete many symbols from MongoDB", description="ลบ symbol หลายตัว (โดยใช้ชื่อ symbol ไม่ใช้ _id)")
+async def delete_symbols_db(data: dict = Body(..., example={"symbols": ["AAV"]})) -> dict:
+    del_symbols = [s.upper() for s in data.get('symbols', [])]
+    result = SYMBOLS_COLLECTION.delete_many({'symbol': {'$in': del_symbols}})
+    return {"deleted_count": result.deleted_count, "deleted_symbols": del_symbols}
 
 if __name__ == "__main__":
     import uvicorn
