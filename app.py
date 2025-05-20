@@ -167,6 +167,13 @@ async def get_dividends_panphor(
                 })
                 if not exists:
                     new_dividends.append(d)
+                else:
+                    # Update soon_date if missing or different
+                    if 'soon_date' not in exists or exists['soon_date'] != d['soon_date']:
+                        dividends_collection.update_one(
+                            {'_id': exists['_id']},
+                            {'$set': {'soon_date': d['soon_date']}}
+                        )
             if new_dividends:
                 dividends_collection.insert_many(new_dividends)
             all_dividends = list(dividends_collection.find({'symbol': symbol_upper}, {'_id': 0}))
