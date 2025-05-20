@@ -75,21 +75,23 @@ def normalize_soon_date(xd_date: str, pay_date: str) -> Optional[datetime]:
             d, m, y = dstr.split('/')
             y = int(y)
             if y < 100:
-                y += 2500
-            # แปลง พ.ศ. เป็น ค.ศ.
-            if y > 2200:
+                y += 2500           # สมมติรับปีเป็น 2 หลัก -> พ.ศ.
+            if y > 2200:            # แปลง พ.ศ. -> ค.ศ.
                 y -= 543
-            this_year = datetime.now(UTC).year
-            if y < this_year - 1:
+            when = datetime(y, int(m), int(d), tzinfo=UTC)
+
+            # กรองปีเก่าออก
+            if when.year < datetime.now(UTC).year - 1:
                 return None
-            return datetime(y, int(m), int(d), tzinfo=UTC)
+            return when
         except Exception:
             return None
-    xd = parse(xd_date)
-    pay = parse(pay_date)
+
+    xd, pay = parse(xd_date), parse(pay_date)
     if xd and pay:
         return xd if xd < pay else pay
     return xd or pay
+
 
 @app.get(
     "/dividends-panphor",
@@ -154,7 +156,7 @@ async def get_dividends_panphor(
                     'pay_date': cols[5],
                     'type': cols[6],
                     'scraped_at': now.timestamp(),
-                    'soon_date': soon_date.isoformat() if soon_date else None
+                    'soon_date': soon_date
                 }
                 dividends.append(dividend)
             new_dividends = []
@@ -251,8 +253,8 @@ async def get_symbols() -> dict:
 async def get_dividends_soon() -> dict:
     today = datetime.now(UTC)
     soon_list = list(dividends_collection.find(
-        {"soon_date": {"$gte": today.isoformat()}},
-        {"_id": 0}
+        {"type": "เงินปันผล"},
+        {"soon_date": {"$gte": today.isoformat()}}
     ).sort("soon_date", 1))
     return {"soon": soon_list, "timestamp": today.timestamp()}
 
