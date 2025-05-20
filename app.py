@@ -76,8 +76,10 @@ def normalize_soon_date(xd_date: str, pay_date: str) -> Optional[datetime]:
             y = int(y)
             if y < 100:
                 y += 2500
-            # กรองปีเก่าออก (เช่น ปี < ปีปัจจุบัน - 1)
-            this_year = datetime.now(UTC).year + 543
+            # แปลง พ.ศ. เป็น ค.ศ.
+            if y > 2200:
+                y -= 543
+            this_year = datetime.now(UTC).year
             if y < this_year - 1:
                 return None
             return datetime(y, int(m), int(d), tzinfo=UTC)
