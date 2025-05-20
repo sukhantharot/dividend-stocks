@@ -175,7 +175,23 @@ async def get_dividends_panphor(
                     new_dividends.append(d)
             if new_dividends:
                 dividends_collection.insert_many(new_dividends)
-            all_dividends = list(dividends_collection.find({'symbol': symbol_upper}, {'_id': 0}))
+            all_dividends = list(dividends_collection.find(
+                {'symbol': symbol_upper},
+                {
+                    '_id': 0,
+                    'symbol': 1,
+                    'year': 1,
+                    'quarter': 1,
+                    'yield_percent': 1,
+                    'amount': 1,
+                    'xd_date': 1,
+                    'pay_date': 1,
+                    'type': 1,
+                    'scraped_at': 1,
+                    'xd_date_utc': 1,
+                    'pay_date_utc': 1
+                }
+            ))
             return {
                 'symbol': symbol_upper,
                 'dividends': all_dividends,
@@ -252,13 +268,27 @@ async def get_dividends_soon() -> dict:
         {
             "type": "เงินปันผล",
             "pay_date_utc": {"$gte": today}
+        },
+        {
+            '_id': 0,
+            'symbol': 1,
+            'year': 1,
+            'quarter': 1,
+            'yield_percent': 1,
+            'amount': 1,
+            'xd_date': 1,
+            'pay_date': 1,
+            'type': 1,
+            'scraped_at': 1,
+            'xd_date_utc': 1,
+            'pay_date_utc': 1
         }
     ).sort("pay_date_utc", 1)
 
     docs = list(cursor)
     soon_list = jsonable_encoder(docs)
 
-    return {"soon": soon_list, "timestamp": today.timestamp()}
+    return {"soon": soon_list, "timestamp": today.timestamp(), "today": today.strftime("%Y-%m-%d %H:%M:%S")}
 
 @app.get("/symbols/db", summary="Find all symbols in MongoDB", description="ดึง symbol ทั้งหมดจาก MongoDB")
 async def get_symbols_db() -> dict:
