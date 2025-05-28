@@ -14,7 +14,6 @@ import json as pyjson
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
-from xd_calendar_set import SETXDScraper
 
 # Load environment variables
 load_dotenv()
@@ -69,17 +68,6 @@ class SummaryItem(BaseModel):
 class SummaryResponse(BaseModel):
     summary: list[SummaryItem]
     year: str
-    timestamp: float
-
-class XDCalendarItem(BaseModel):
-    date: str
-    symbol: str
-    dividend_rate: float
-    event_type: str
-    raw_text: str
-
-class XDCalendarResponse(BaseModel):
-    data: List[XDCalendarItem]
     timestamp: float
 
 def normalize_date(date: str) -> Optional[datetime]:
@@ -321,46 +309,6 @@ async def delete_symbols_db(data: dict = Body(..., example={"symbols": ["AAV"]})
     del_symbols = [s.upper() for s in data.get('symbols', [])]
     result = SYMBOLS_COLLECTION.delete_many({'symbol': {'$in': del_symbols}})
     return {"deleted_count": result.deleted_count, "deleted_symbols": del_symbols}
-
-@app.get(
-    "/xd-calendar",
-    response_model=XDCalendarResponse,
-    summary="Get XD calendar data for a specific month",
-    description="ดึงข้อมูล XD จากปฏิทิน SET สำหรับเดือนที่ระบุ"
-)
-async def get_xd_calendar(
-    year: Optional[int] = Query(None, description="Year (e.g. 2024)"),
-    month: Optional[int] = Query(None, description="Month (1-12)")
-) -> dict:
-    scraper = SETXDScraper()
-    try:
-        data = scraper.get_xd_calendar_data(year, month)
-        return {
-            "data": data,
-            "timestamp": datetime.now(UTC).timestamp()
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get(
-    "/xd-calendar/range",
-    response_model=XDCalendarResponse,
-    summary="Get XD calendar data for a date range",
-    description="ดึงข้อมูล XD จากปฏิทิน SET สำหรับช่วงวันที่ที่ระบุ"
-)
-async def get_xd_calendar_range(
-    start_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
-    end_date: str = Query(..., description="End date (YYYY-MM-DD)")
-) -> dict:
-    scraper = SETXDScraper()
-    try:
-        data = scraper.get_xd_data_range(start_date, end_date)
-        return {
-            "data": data,
-            "timestamp": datetime.now(UTC).timestamp()
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
